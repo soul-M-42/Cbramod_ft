@@ -1,0 +1,6 @@
+.idea
+data/*
+datasets/*
+*.pyc
+*.pth
+.vscode/*
