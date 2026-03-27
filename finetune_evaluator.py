@@ -18,11 +18,13 @@ class Evaluator:
         for x, y in tqdm(self.data_loader, mininterval=1):
             x = x.cuda()
             y = y.cuda()
+            cls_label = y[:, -1].long()
+            reg_label = y[:, :-1]
 
-            pred = model(x)
-            pred_y = torch.max(pred, dim=-1)[1]
+            cls, reg = model(x)
+            pred_y = torch.max(cls, dim=-1)[1]
 
-            truths += y.cpu().squeeze().numpy().tolist()
+            truths += cls_label.cpu().squeeze().numpy().tolist()
             preds += pred_y.cpu().squeeze().numpy().tolist()
 
         truths = np.array(truths)

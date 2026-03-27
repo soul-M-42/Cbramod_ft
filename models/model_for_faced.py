@@ -50,12 +50,21 @@ class Model(nn.Module):
                 nn.Dropout(param.dropout),
                 nn.Linear(200, param.num_of_classes),
             )
+        self.regression = nn.Sequential(
+                Rearrange('b c s d -> b (c s d)'),
+                nn.Linear(32 * param.s_duration * 200, param.s_duration * 200),
+                nn.ELU(),
+                nn.Dropout(param.dropout),
+                nn.Linear(param.s_duration * 200, 200),
+                nn.ELU(),
+                nn.Dropout(param.dropout),
+                nn.Linear(200, param.num_of_regression),
+            )
 
     def forward(self, x):
         bz, ch_num, seq_len, patch_size = x.shape
         feats = self.backbone(x)
-        out = self.classifier(feats)
-        return out
-
-
+        cls = self.classifier(feats)
+        reg = self.regression(feats)
+        return cls, reg
 

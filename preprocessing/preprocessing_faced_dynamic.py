@@ -33,7 +33,7 @@ def main():
     }
 
     s_duration = params.s_duration
-    db = lmdb.open(F'./data/datasets/BigDownstream/Faced/processed_{s_duration}s', map_size=6612500172)
+    db = lmdb.open(F'./data/datasets/BigDownstream/Faced/processed_dynamic_{s_duration}s', map_size=6612500172)
     for files_key in files_dict.keys():
         for file in files_dict[files_key]:
             f = open(os.path.join(root_dir, file), 'rb')
@@ -41,13 +41,17 @@ def main():
             eeg = signal.resample(array, 6000, axis=2)
             eeg_ = eeg.reshape(28, 32, 30, 200)
             for i, (samples, label) in enumerate(zip(eeg_, labels)):
+                trial_emotion = emotion_matrix[i] # [15, 7]
                 # interpolate to 30s
+                trial_emotion_interp = signal.resample(trial_emotion, 30, axis=0) # [30, 7]
                 for j in range(30 // s_duration):
                     sample = samples[:, s_duration*j:s_duration*(j+1), :]
                     sample_key = f'{file}-{i}-{j}'
                     print(sample_key)
+                    # label is the average emotion in this segment
+                    segment_emotion = trial_emotion_interp[s_duration*j:s_duration*(j+1), :].mean(axis=0)
                     data_dict = {
-                        'sample': sample, 'label': label
+                        'sample': sample, 'label': segment_emotion
                     }
                     txn = db.begin(write=True)
                     txn.put(key=sample_key.encode(), value=pickle.dumps(data_dict))

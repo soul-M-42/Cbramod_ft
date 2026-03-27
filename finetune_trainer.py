@@ -11,16 +11,18 @@ from finetune_evaluator import Evaluator
 
 
 class Trainer(object):
-    def __init__(self, params, data_loader, model):
+    def __init__(self, params, data_loader, model, writer=None):
         self.params = params
         self.data_loader = data_loader
+        self.writer = writer
 
         self.val_eval = Evaluator(params, self.data_loader['val'])
         self.test_eval = Evaluator(params, self.data_loader['test'])
 
         self.model = model.cuda()
         if self.params.downstream_dataset in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a']:
-            self.criterion = CrossEntropyLoss(label_smoothing=self.params.label_smoothing).cuda()
+            self.cls_criterion = CrossEntropyLoss(label_smoothing=self.params.label_smoothing).cuda()
+            self.reg_criterion = MSELoss().cuda()
         elif self.params.downstream_dataset in ['SHU-MI', 'CHB-MIT', 'Mumtaz2016', 'MentalArithmetic', 'TUAB']:
             self.criterion = BCEWithLogitsLoss().cuda()
         elif self.params.downstream_dataset == 'SEED-VIG':
@@ -66,6 +68,18 @@ class Trainer(object):
         )
         print(self.model)
 
+    def _log_scalar(self, tag, value, step):
+        if self.writer is not None:
+            self.writer.add_scalar(tag, value, step)
+
+    def _log_text(self, tag, value, step):
+        if self.writer is not None:
+            self.writer.add_text(tag, value, step)
+
+    def _log_learning_rates(self, epoch, optim_state):
+        for index, param_group in enumerate(optim_state['param_groups']):
+            self._log_scalar('train/lr_group_{}'.format(index), param_group['lr'], epoch)
+
     def train_for_multiclass(self):
         f1_best = 0
         kappa_best = 0
@@ -74,33 +88,47 @@ class Trainer(object):
         for epoch in range(self.params.epochs):
             self.model.train()
             start_time = timer()
-            losses = []
-            for x, y in tqdm(self.data_loader['train'], mininterval=10):
-                self.optimizer.zero_grad()
-                x = x.cuda()
-                y = y.cuda()
-                pred = self.model(x)
-                if self.params.downstream_dataset == 'ISRUC':
-                    loss = self.criterion(pred.transpose(1, 2), y)
-                else:
-                    loss = self.criterion(pred, y)
+            losses_total = []
+            losses_cls = []
+            losses_reg = []
+            if(1):
+                for x, y in tqdm(self.data_loader['train'], mininterval=10):
+                    self.optimizer.zero_grad()
+                    x = x.cuda()
+                    y = y.cuda()
+                    cls_label = y[:, -1].long()
+                    reg_label = y[:, :-1]
+                    pred, reg = self.model(x)
+                    if self.params.downstream_dataset == 'ISRUC':
+                        loss = self.criterion(pred.transpose(1, 2), y)
+                    else:
+                        cls_loss = self.cls_criterion(pred, cls_label)
+                        reg_loss = self.reg_criterion(reg, reg_label)
+                        loss = cls_loss + reg_loss
+                        # loss = cls_loss + reg_loss * 0.0
 
-                loss.backward()
-                losses.append(loss.data.cpu().numpy())
-                if self.params.clip_value > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                    # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
-                self.optimizer.step()
-                self.optimizer_scheduler.step()
+                    loss.backward()
+                    losses_total.append(loss.data.cpu().numpy())
+                    losses_cls.append(cls_loss.data.cpu().numpy())
+                    losses_reg.append(reg_loss.data.cpu().numpy())
+                    if self.params.clip_value > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
+                        # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
+                    self.optimizer.step()
+                    self.optimizer_scheduler.step()
 
             optim_state = self.optimizer.state_dict()
-
+            train_loss = float(np.mean(losses_total))
+            cls_loss = float(np.mean(losses_cls))
+            reg_loss = float(np.mean(losses_reg))
             with torch.no_grad():
                 acc, kappa, f1, cm = self.val_eval.get_metrics_for_multiclass(self.model)
                 print(
-                    "Epoch {} : Training Loss: {:.5f}, acc: {:.5f}, kappa: {:.5f}, f1: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
+                    "Epoch {} : Training Loss: {:.5f} = cls {:.5f} + reg {:.5f} , acc: {:.5f}, kappa: {:.5f}, f1: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
                         epoch + 1,
-                        np.mean(losses),
+                        train_loss,
+                        cls_loss,
+                        reg_loss,
                         acc,
                         kappa,
                         f1,
@@ -109,6 +137,14 @@ class Trainer(object):
                     )
                 )
                 print(cm)
+                self._log_scalar('train/loss', train_loss, epoch + 1)
+                self._log_scalar('train/cls_loss', cls_loss, epoch + 1)
+                self._log_scalar('train/reg_loss', reg_loss, epoch + 1)
+                self._log_scalar('val/acc', acc, epoch + 1)
+                self._log_scalar('val/kappa', kappa, epoch + 1)
+                self._log_scalar('val/f1', f1, epoch + 1)
+                self._log_text('val/confusion_matrix', str(cm), epoch + 1)
+                self._log_learning_rates(epoch + 1, optim_state)
                 if kappa > kappa_best:
                     print("kappa increasing....saving weights !! ")
                     print("Val Evaluation: acc: {:.5f}, kappa: {:.5f}, f1: {:.5f}".format(
@@ -140,6 +176,15 @@ class Trainer(object):
             model_path = self.params.model_dir + "/epoch{}_acc_{:.5f}_kappa_{:.5f}_f1_{:.5f}.pth".format(best_f1_epoch, acc, kappa, f1)
             torch.save(self.model.state_dict(), model_path)
             print("model save in " + model_path)
+            self._log_scalar('best/val_acc', acc_best, best_f1_epoch)
+            self._log_scalar('best/val_kappa', kappa_best, best_f1_epoch)
+            self._log_scalar('best/val_f1', f1_best, best_f1_epoch)
+            self._log_text('best/val_confusion_matrix', str(cm_best), best_f1_epoch)
+            self._log_scalar('test/acc', acc, best_f1_epoch)
+            self._log_scalar('test/kappa', kappa, best_f1_epoch)
+            self._log_scalar('test/f1', f1, best_f1_epoch)
+            self._log_text('test/confusion_matrix', str(cm), best_f1_epoch)
+            self._log_text('artifacts/model_path', model_path, best_f1_epoch)
 
     def train_for_binaryclass(self):
         acc_best = 0
@@ -167,13 +212,14 @@ class Trainer(object):
                 self.optimizer_scheduler.step()
 
             optim_state = self.optimizer.state_dict()
+            train_loss = float(np.mean(losses))
 
             with torch.no_grad():
                 acc, pr_auc, roc_auc, cm = self.val_eval.get_metrics_for_binaryclass(self.model)
                 print(
                     "Epoch {} : Training Loss: {:.5f}, acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
                         epoch + 1,
-                        np.mean(losses),
+                        train_loss,
                         acc,
                         pr_auc,
                         roc_auc,
@@ -182,6 +228,12 @@ class Trainer(object):
                     )
                 )
                 print(cm)
+                self._log_scalar('train/loss', train_loss, epoch + 1)
+                self._log_scalar('val/acc', acc, epoch + 1)
+                self._log_scalar('val/pr_auc', pr_auc, epoch + 1)
+                self._log_scalar('val/roc_auc', roc_auc, epoch + 1)
+                self._log_text('val/confusion_matrix', str(cm), epoch + 1)
+                self._log_learning_rates(epoch + 1, optim_state)
                 if roc_auc > roc_auc_best:
                     print("roc_auc increasing....saving weights !! ")
                     print("Val Evaluation: acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}".format(
@@ -208,11 +260,21 @@ class Trainer(object):
                 )
             )
             print(cm)
+            print_visual_cm(cm)
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
             model_path = self.params.model_dir + "/epoch{}_acc_{:.5f}_pr_{:.5f}_roc_{:.5f}.pth".format(best_f1_epoch, acc, pr_auc, roc_auc)
             torch.save(self.model.state_dict(), model_path)
             print("model save in " + model_path)
+            self._log_scalar('best/val_acc', acc_best, best_f1_epoch)
+            self._log_scalar('best/val_pr_auc', pr_auc_best, best_f1_epoch)
+            self._log_scalar('best/val_roc_auc', roc_auc_best, best_f1_epoch)
+            self._log_text('best/val_confusion_matrix', str(cm_best), best_f1_epoch)
+            self._log_scalar('test/acc', acc, best_f1_epoch)
+            self._log_scalar('test/pr_auc', pr_auc, best_f1_epoch)
+            self._log_scalar('test/roc_auc', roc_auc, best_f1_epoch)
+            self._log_text('test/confusion_matrix', str(cm), best_f1_epoch)
+            self._log_text('artifacts/model_path', model_path, best_f1_epoch)
 
     def train_for_regression(self):
         corrcoef_best = 0
@@ -238,13 +300,14 @@ class Trainer(object):
                 self.optimizer_scheduler.step()
 
             optim_state = self.optimizer.state_dict()
+            train_loss = float(np.mean(losses))
 
             with torch.no_grad():
                 corrcoef, r2, rmse = self.val_eval.get_metrics_for_regression(self.model)
                 print(
                     "Epoch {} : Training Loss: {:.5f}, corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
                         epoch + 1,
-                        np.mean(losses),
+                        train_loss,
                         corrcoef,
                         r2,
                         rmse,
@@ -252,6 +315,11 @@ class Trainer(object):
                         (timer() - start_time) / 60
                     )
                 )
+                self._log_scalar('train/loss', train_loss, epoch + 1)
+                self._log_scalar('val/corrcoef', corrcoef, epoch + 1)
+                self._log_scalar('val/r2', r2, epoch + 1)
+                self._log_scalar('val/rmse', rmse, epoch + 1)
+                self._log_learning_rates(epoch + 1, optim_state)
                 if r2 > r2_best:
                     print("r2 increasing....saving weights !! ")
                     print("Val Evaluation: corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}".format(
@@ -283,3 +351,10 @@ class Trainer(object):
             model_path = self.params.model_dir + "/epoch{}_corrcoef_{:.5f}_r2_{:.5f}_rmse_{:.5f}.pth".format(best_r2_epoch, corrcoef, r2, rmse)
             torch.save(self.model.state_dict(), model_path)
             print("model save in " + model_path)
+            self._log_scalar('best/val_corrcoef', corrcoef_best, best_r2_epoch)
+            self._log_scalar('best/val_r2', r2_best, best_r2_epoch)
+            self._log_scalar('best/val_rmse', rmse_best, best_r2_epoch)
+            self._log_scalar('test/corrcoef', corrcoef, best_r2_epoch)
+            self._log_scalar('test/r2', r2, best_r2_epoch)
+            self._log_scalar('test/rmse', rmse, best_r2_epoch)
+            self._log_text('artifacts/model_path', model_path, best_r2_epoch)

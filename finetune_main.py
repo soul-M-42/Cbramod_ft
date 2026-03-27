@@ -1,8 +1,11 @@
 import argparse
+import os
 import random
+from datetime import datetime
 
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from datasets import faced_dataset, seedv_dataset, physio_dataset, shu_dataset, isruc_dataset, chb_dataset, \
     speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset
@@ -10,6 +13,22 @@ from finetune_trainer import Trainer
 from models import model_for_faced, model_for_seedv, model_for_physio, model_for_shu, model_for_isruc, model_for_chb, \
     model_for_speech, model_for_mumtaz, model_for_seedvig, model_for_stress, model_for_tuev, model_for_tuab, \
     model_for_bciciv2a
+
+
+def create_tensorboard_writer(params):
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    run_name = params.tensorboard_name or '{}_{}'.format(params.downstream_dataset, timestamp)
+    log_dir = os.path.join(params.tensorboard_dir, run_name)
+    os.makedirs(log_dir, exist_ok=True)
+
+    params.tensorboard_log_dir = log_dir
+    writer = SummaryWriter(log_dir=log_dir)
+    writer.add_text(
+        'config/arguments',
+        '\n'.join(['{}: {}'.format(key, value) for key, value in sorted(vars(params).items())])
+    )
+    print('TensorBoard logs will be saved to {}'.format(log_dir))
+    return writer
 
 
 def main():
@@ -41,6 +60,7 @@ def main():
                         'ets/BigDownstream/mental-arithmetic/processed',
                         help='datasets_dir')
     parser.add_argument('--num_of_classes', type=int, default=2, help='number of classes')
+    parser.add_argument('--num_of_regression', type=int, default=2, help='number of regression targets')
     parser.add_argument('--model_dir', type=str, default='/data/wjq/models_weights/Big/BigFaced', help='model_dir')
     """############ Downstream dataset settings ############"""
 
@@ -55,92 +75,100 @@ def main():
     parser.add_argument('--foundation_dir', type=str,
                         default='pretrained_weights/pretrained_weights.pth',
                         help='foundation_dir')
+    parser.add_argument('--tensorboard_dir', type=str, default='runs/finetune', help='tensorboard_dir')
+    parser.add_argument('--tensorboard_name', type=str, default='', help='tensorboard run name')
 
     params = parser.parse_args()
     print(params)
+    writer = create_tensorboard_writer(params)
 
-    setup_seed(params.seed)
-    torch.cuda.set_device(params.cuda)
-    print('The downstream dataset is {}'.format(params.downstream_dataset))
-    if params.downstream_dataset == 'FACED':
-        load_dataset = faced_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_faced.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'SEED-V':
-        load_dataset = seedv_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_seedv.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'PhysioNet-MI':
-        load_dataset = physio_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_physio.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'SHU-MI':
-        load_dataset = shu_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_shu.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'ISRUC':
-        load_dataset = isruc_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_isruc.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'CHB-MIT':
-        load_dataset = chb_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_chb.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'BCIC2020-3':
-        load_dataset = speech_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_speech.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'Mumtaz2016':
-        load_dataset = mumtaz_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_mumtaz.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'SEED-VIG':
-        load_dataset = seedvig_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_seedvig.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_regression()
-    elif params.downstream_dataset == 'MentalArithmetic':
-        load_dataset = stress_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_stress.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'TUEV':
-        load_dataset = tuev_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_tuev.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'TUAB':
-        load_dataset = tuab_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_tuab.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'BCIC-IV-2a':
-        load_dataset = bciciv2a_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_bciciv2a.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    print('Done!!!!!')
+    try:
+        setup_seed(params.seed)
+        torch.cuda.set_device(params.cuda)
+        print('The downstream dataset is {}'.format(params.downstream_dataset))
+        if params.downstream_dataset == 'FACED':
+            load_dataset = faced_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_faced.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'SEED-V':
+            load_dataset = seedv_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_seedv.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'PhysioNet-MI':
+            load_dataset = physio_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_physio.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'SHU-MI':
+            load_dataset = shu_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_shu.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_binaryclass()
+        elif params.downstream_dataset == 'ISRUC':
+            load_dataset = isruc_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_isruc.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'CHB-MIT':
+            load_dataset = chb_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_chb.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_binaryclass()
+        elif params.downstream_dataset == 'BCIC2020-3':
+            load_dataset = speech_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_speech.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'Mumtaz2016':
+            load_dataset = mumtaz_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_mumtaz.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_binaryclass()
+        elif params.downstream_dataset == 'SEED-VIG':
+            load_dataset = seedvig_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_seedvig.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_regression()
+        elif params.downstream_dataset == 'MentalArithmetic':
+            load_dataset = stress_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_stress.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_binaryclass()
+        elif params.downstream_dataset == 'TUEV':
+            load_dataset = tuev_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_tuev.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        elif params.downstream_dataset == 'TUAB':
+            load_dataset = tuab_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_tuab.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_binaryclass()
+        elif params.downstream_dataset == 'BCIC-IV-2a':
+            load_dataset = bciciv2a_dataset.LoadDataset(params)
+            data_loader = load_dataset.get_data_loader()
+            model = model_for_bciciv2a.Model(params)
+            t = Trainer(params, data_loader, model, writer=writer)
+            t.train_for_multiclass()
+        else:
+            raise ValueError('Unsupported downstream dataset: {}'.format(params.downstream_dataset))
+        print('Done!!!!!')
+    finally:
+        writer.close()
 
 
 def setup_seed(seed):
