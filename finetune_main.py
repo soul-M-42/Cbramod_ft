@@ -88,7 +88,8 @@ def main():
         print('The downstream dataset is {}'.format(params.downstream_dataset))
         if params.downstream_dataset == 'FACED':
             load_dataset = faced_dataset.LoadDataset(params)
-            data_loader = load_dataset.get_data_loader()
+            # data_loader = load_dataset.get_data_loader()
+            data_loader = load_dataset.get_data_loader(contrast=True, n_batch=64)
             model = model_for_faced.Model(params)
             t = Trainer(params, data_loader, model, writer=writer)
             t.train_for_multiclass()

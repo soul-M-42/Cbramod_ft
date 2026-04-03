@@ -21,7 +21,7 @@ class Evaluator:
             cls_label = y[:, -1].long()
             reg_label = y[:, :-1]
 
-            cls, reg = model(x)
+            feats, cls, reg = model(x)
             pred_y = torch.max(cls, dim=-1)[1]
 
             truths += cls_label.cpu().squeeze().numpy().tolist()

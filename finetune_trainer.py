@@ -8,6 +8,7 @@ from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, MSELoss
 from tqdm import tqdm
 
 from finetune_evaluator import Evaluator
+from loss import SimCLRLoss
 
 
 class Trainer(object):
@@ -23,6 +24,7 @@ class Trainer(object):
         if self.params.downstream_dataset in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a']:
             self.cls_criterion = CrossEntropyLoss(label_smoothing=self.params.label_smoothing).cuda()
             self.reg_criterion = MSELoss().cuda()
+            self.sim_criterion = SimCLRLoss(temperature=0.07).cuda()
         elif self.params.downstream_dataset in ['SHU-MI', 'CHB-MIT', 'Mumtaz2016', 'MentalArithmetic', 'TUAB']:
             self.criterion = BCEWithLogitsLoss().cuda()
         elif self.params.downstream_dataset == 'SEED-VIG':
@@ -91,6 +93,7 @@ class Trainer(object):
             losses_total = []
             losses_cls = []
             losses_reg = []
+            losses_sim = []
             if(1):
                 for x, y in tqdm(self.data_loader['train'], mininterval=10):
                     self.optimizer.zero_grad()
@@ -98,19 +101,23 @@ class Trainer(object):
                     y = y.cuda()
                     cls_label = y[:, -1].long()
                     reg_label = y[:, :-1]
-                    pred, reg = self.model(x)
+                    feats, pred, reg = self.model(x)
                     if self.params.downstream_dataset == 'ISRUC':
                         loss = self.criterion(pred.transpose(1, 2), y)
                     else:
                         cls_loss = self.cls_criterion(pred, cls_label)
                         reg_loss = self.reg_criterion(reg, reg_label)
-                        loss = cls_loss + reg_loss
+                        sim_loss, sim_logits, sim_labels, [sim_acc_1, sim_acc_5] = self.sim_criterion(feats)
+                        # loss = cls_loss + reg_loss + sim_loss
+                        loss = cls_loss + sim_loss * 0.1
+
                         # loss = cls_loss + reg_loss * 0.0
 
                     loss.backward()
                     losses_total.append(loss.data.cpu().numpy())
                     losses_cls.append(cls_loss.data.cpu().numpy())
                     losses_reg.append(reg_loss.data.cpu().numpy())
+                    losses_sim.append(sim_loss.data.cpu().numpy())
                     if self.params.clip_value > 0:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
                         # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
@@ -121,6 +128,7 @@ class Trainer(object):
             train_loss = float(np.mean(losses_total))
             cls_loss = float(np.mean(losses_cls))
             reg_loss = float(np.mean(losses_reg))
+            sim_loss = float(np.mean(losses_sim))
             with torch.no_grad():
                 acc, kappa, f1, cm = self.val_eval.get_metrics_for_multiclass(self.model)
                 print(
@@ -260,7 +268,6 @@ class Trainer(object):
                 )
             )
             print(cm)
-            print_visual_cm(cm)
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
             model_path = self.params.model_dir + "/epoch{}_acc_{:.5f}_pr_{:.5f}_roc_{:.5f}.pth".format(best_f1_epoch, acc, pr_auc, roc_auc)

@@ -60,11 +60,27 @@ class Model(nn.Module):
                 nn.Dropout(param.dropout),
                 nn.Linear(200, param.num_of_regression),
             )
+        self.simfeature = nn.Sequential(
+                Rearrange('b c s d -> b (c s d)'),
+                nn.Linear(32 * param.s_duration * 200, param.s_duration * 200),
+                nn.ELU(),
+                nn.Dropout(param.dropout),
+                nn.Linear(param.s_duration * 200, 200),
+                # nn.ELU(),
+                # nn.Dropout(param.dropout),
+                # nn.Linear(200, param.num_of_regression),
+            )
+        # self.simfeature = nn.Sequential(
+        #     Rearrange('b c s d -> b d c s'),
+        #     # [B, dim, n_channel, T]
+        #     cnn_MLLA(
+        #     n_timeFilters=32, timeFilterLen=30, n_msFilters=4, msFilter_timeLen=3, n_channs=32)
+        #     )
 
     def forward(self, x):
         bz, ch_num, seq_len, patch_size = x.shape
         feats = self.backbone(x)
         cls = self.classifier(feats)
         reg = self.regression(feats)
-        return cls, reg
-
+        fea = self.simfeature(feats)
+        return fea, cls, reg

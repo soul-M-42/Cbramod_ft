@@ -1,0 +1,4 @@
+add a parameter, contrastive learning, for LoadDataset class in datasets/faced_dataset.py, to build a dataloader for contrast learning.
+use the same dataset, but if contrastive-learning on, return a anchor-positive version dataloader. this needs a new sampler:
+for each eeg sample (anchor), the positive pairs are sample from other subjects with same trial-sample id. specifically, eeg sample label in CustomDataset is like sub061.pkl-21-8. For this sample, the positive pairs are all sub***.pkl-21-8.
+when n_sub is huge, this sampling method will generate too many pairs, so another parameter, n_batch per epoch is needed. first shuffle all pairs and then get n_batch batches each epoch. note that batches are different across epoches.
